@@ -2,30 +2,34 @@ import {useEffect,useState,useCallback} from 'react'
 import {supabase,tempClient} from './supabase'
 import * as XLSX from 'xlsx'
 
-const TYPES={extract:'مستخلص',material_in:'شراء خامات',material_out:'استهلاك خامات',labor:'يومية عمال',expense:'مصروف',income:'استلام فلوس',cheque_in:'شيك مستلم',cheque_out:'شيك صادر'}
-const TABS=[['summary','الملخص'],['all','الكل'],['income','المقبوضات'],['extract','المستخلصات'],['material','الخامات'],['labor','العمال'],['expense','المصروفات'],['cheque','الشيكات']]
-const PERMS={view:'عرض المشاريع',create_project:'إنشاء مشروع',add:'تسجيل بيانات',delete:'حذف بيانات'}
+const TYPES={extract:'مستخلص',material_in:'شراء خامات',material_out:'استهلاك خامات',labor:'يومية عمال',expense:'مصروف',income:'استلام فلوس',cheque_in:'شيك مستلم',cheque_out:'شيك صادر',transport:'مواصلات'}
+const TABS=[['summary','الملخص'],['all','الكل'],['income','المقبوضات'],['extract','المستخلصات'],['material','الخامات'],['labor','العمال'],['expense','المصروفات'],['transport','المواصلات'],['cheque','الشيكات'],['ext','مستخلصات خارجية'],['bills','فواتير المشتريات']]
+const PERMS={view:'عرض المشاريع',create_project:'إنشاء مشروع',add:'إضافة بطلب موافقة',direct:'إضافة مباشرة بدون موافقة',delete:'طلب حذف'}
 const money=n=>Number(n||0).toLocaleString('ar-EG')+' ج.م'
 const when=d=>new Date(d).toLocaleString('ar-EG',{dateStyle:'medium',timeStyle:'short'})
-const SPENT=['material_in','labor','expense']
+const SPENT=['material_in','labor','expense','transport']
 
 export default function App(){
-  const [session,setSession]=useState(undefined),[me,setMe]=useState(null),[view,setView]=useState({page:'projects'})
+  const [session,setSession]=useState(undefined),[me,setMe]=useState(null),[pend,setPend]=useState(0),[view,setView]=useState({page:'home'})
   useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session))
     const {data:l}=supabase.auth.onAuthStateChange((_,s)=>setSession(s));return()=>l.subscription.unsubscribe()},[])
   useEffect(()=>{if(session)supabase.from('profiles').select('*').eq('id',session.user.id).single().then(({data})=>setMe(data));else setMe(null)},[session])
+  useEffect(()=>{if(me?.role!=='admin')return;const f=()=>supabase.from('requests').select('id',{count:'exact',head:true}).eq('status','pending').then(({count})=>setPend(count||0));f();const t=setInterval(f,30000);return()=>clearInterval(t)},[me,view])
   if(session===undefined)return null
   if(!session)return <Login/>
   if(!me)return <div className="center">...</div>
   const can=p=>me.role==='admin'||me.perms?.includes(p)
   return <div className="shell">
-    <header><div className="brand"><span>◆</span> إدارة المقاولات</div>
-      <nav><button onClick={()=>setView({page:'projects'})}>المشاريع</button>
+    <header><div className="brand"><img src="/logo.png" className="hlogo" alt="الكيان"/><small className="muted">إدارة المشاريع</small></div>
+      <nav><button onClick={()=>setView({page:'home'})}>الشركات</button>
       <button onClick={()=>setView({page:'quotes'})}>عروض الأسعار</button>
+      {can('add')&&<button onClick={()=>setView({page:'requests'})}>الطلبات{pend>0&&<b className="badge">{pend}</b>}</button>}
       {me.role==='admin'&&<button onClick={()=>setView({page:'users'})}>المستخدمين</button>}</nav>
       <div className="who">{me.full_name}<button className="ghost" onClick={()=>supabase.auth.signOut()}>خروج</button></div></header>
-    <main>{view.page==='projects'&&<Projects can={can} open={id=>setView({page:'project',id})}/>}
-      {view.page==='project'&&<Project id={view.id} can={can} back={()=>setView({page:'projects'})}/>}
+    <main>{view.page==='home'&&<Companies can={can} open={id=>setView({page:'company',id})}/>}
+      {view.page==='company'&&<Company id={view.id} can={can} admin={me.role==='admin'} back={()=>setView({page:'home'})} open={id=>setView({page:'project',id,cid:view.id})}/>}
+      {view.page==='project'&&<Project id={view.id} can={can} admin={me.role==='admin'} back={()=>setView(view.cid?{page:'company',id:view.cid}:{page:'home'})}/>}
+      {view.page==='requests'&&<Requests admin={me.role==='admin'}/>}
       {view.page==='users'&&<Users/>}{view.page==='quotes'&&<Quotes can={can}/>}</main></div>
 }
 
@@ -35,7 +39,7 @@ function Login(){
     const r=signup?await supabase.auth.signUp({email,password:pw,options:{data:{full_name:name}}}):await supabase.auth.signInWithPassword({email,password:pw})
     if(r.error)setErr(r.error.message)}
   return <div className="center"><form className="card login" onSubmit={go}>
-    <div className="brand big"><span>◆</span> إدارة المقاولات</div>
+    <div><img src="/logo.png" className="llogo" alt="الكيان للمقاولات"/><p className="muted" style={{textAlign:"center",margin:0}}>نظام إدارة المشاريع</p></div>
     {signup&&<input placeholder="الاسم" value={name} onChange={e=>setN(e.target.value)} required/>}
     <input type="email" placeholder="البريد الإلكتروني" value={email} onChange={e=>setE(e.target.value)} required/>
     <input type="password" placeholder="كلمة المرور" value={pw} onChange={e=>setP(e.target.value)} required minLength={6}/>
@@ -44,11 +48,11 @@ function Login(){
     <a onClick={()=>setS(!signup)}>{signup?'عندي حساب':'حساب جديد (أول حساب = أدمن)'}</a></form></div>
 }
 
-function Projects({can,open}){
+function Projects({can,open,cid}){
   const [list,setList]=useState([]),[f,setF]=useState(null)
-  const load=useCallback(async()=>{const {data}=await supabase.from('projects').select('*').order('created_at',{ascending:false});setList(data||[])},[])
+  const load=useCallback(async()=>{let q=supabase.from('projects').select('*').order('created_at',{ascending:false});q=cid==='none'?q.is('company_id',null):q.eq('company_id',cid);const {data}=await q;setList(data||[])},[cid])
   useEffect(()=>{load()},[load])
-  const save=async e=>{e.preventDefault();const {error}=await supabase.from('projects').insert(f);if(error)alert(error.message);else{setF(null);load()}}
+  const save=async e=>{e.preventDefault();const {error}=await supabase.from('projects').insert({...f,company_id:cid==='none'?null:cid});if(error)alert(error.message);else{setF(null);load()}}
   return <>
     <div className="bar"><h2>المشاريع</h2>{can('create_project')&&<button className="gold" onClick={()=>setF({name:'',client:'',location:'',work_type:'',contract_value:0})}>+ إنشاء مشروع</button>}</div>
     {f&&<form className="card grid" onSubmit={save}>
@@ -64,7 +68,7 @@ function Projects({can,open}){
       {!list.length&&<p className="muted">لا توجد مشاريع بعد</p>}</div></>
 }
 
-function Project({id,can,back}){
+function Project({id,can,admin,back}){
   const [p,setP]=useState(null),[rows,setRows]=useState([]),[tab,setTab]=useState('summary'),[f,setF]=useState(null),[rep,setRep]=useState(false),[focus,setFocus]=useState(null)
   const load=useCallback(async()=>{
     const a=await supabase.from('projects').select('*').eq('id',id).single();setP(a.data)
@@ -82,8 +86,10 @@ function Project({id,can,back}){
     const row={project_id:id,type:f.type,title:ex?`مستخلص رقم ${f.d.num}`:f.title,note:f.note,unit:f.unit,image_path,
       details:ex?{...f.d,items:f.items}:ch?{due:f.d?.due||null}:null,
       amount:ex?extTotal(f.items):f.type==='material_out'?0:f.amount||0,qty:f.qty||null}
-    const {error}=await supabase.from('entries').insert(row);if(error)alert(error.message);else{setF(null);load()}}
-  const del=async r=>{if(confirm('حذف السجل؟')){if(r.image_path)await supabase.storage.from('attachments').remove([r.image_path]);await supabase.from('entries').delete().eq('id',r.id);load()}}
+    const {error}=can('direct')?await supabase.from('entries').insert(row):await supabase.from('requests').insert({kind:'entry',project_id:id,payload:row})
+    if(error)alert(error.message);else{if(!can('direct'))alert('تم إرسال الطلب للأدمن للموافقة');setF(null);load()}}
+  const del=async r=>{if(!admin){if(confirm('إرسال طلب حذف للأدمن؟')){const {error}=await supabase.from('requests').insert({kind:'delete_entry',project_id:id,payload:{entry_id:r.id,title:r.title,type:r.type,amount:r.amount}});alert(error?error.message:'تم إرسال طلب الحذف')}return}
+  if(confirm('حذف السجل؟')){if(r.image_path)await supabase.storage.from('attachments').remove([r.image_path]);await supabase.from('entries').delete().eq('id',r.id);load()}}
   if(!p)return null
   const isMat=f?.type?.startsWith('material'),isExt=f?.type==='extract'
   return <>
@@ -116,7 +122,10 @@ function Project({id,can,back}){
     {tab==='material'&&<div className="card"><h4>رصيد الخامات</h4>{Object.entries(stock).map(([n,s])=>
       <div key={n} className="line"><span>{n}</span><span>وارد {s.in} · مستهلك {s.out} · متبقي <b className="gold-t">{s.in-s.out}</b> {s.unit}</span></div>)}</div>}
     {tab==='summary'&&<Summary p={p} rows={rows} go={(t,i)=>{setTab(t);setFocus(i)}}/>}
-    {tab!=='summary'&&<div className="card table"><table><thead><tr><th>التاريخ والوقت</th><th>النوع</th><th>البيان</th><th>الكمية</th><th>المبلغ</th><th>ملاحظات</th><th/></tr></thead>
+    {tab==='extract'&&<ExtractsPanel p={p} rows={rows}/>}
+    {tab==='ext'&&<Files cat="external_extract" projectId={id} p={p} can={can} admin={admin}/>}
+    {tab==='bills'&&<Files cat="bill" projectId={id} p={p} can={can} admin={admin}/>}
+    {!['summary','ext','bills'].includes(tab)&&<div className="card table"><table><thead><tr><th>التاريخ والوقت</th><th>النوع</th><th>البيان</th><th>الكمية</th><th>المبلغ</th><th>ملاحظات</th><th/></tr></thead>
       <tbody>{shown.map(r=><tr key={r.id} id={'r'+r.id} className={focus===r.id?'hl':''}><td data-label="التاريخ">{when(r.created_at)}</td><td data-label="النوع"><span className={'tag '+r.type}>{TYPES[r.type]}</span></td><td data-label="البيان">{r.title}</td>
         <td data-label="الكمية">{r.qty?`${r.qty} ${r.unit||''}`:'—'}</td><td data-label="المبلغ">{r.type==='material_out'?'—':money(r.amount)}</td><td data-label="ملاحظات">{r.note}{r.details?.due&&` · استحقاق ${r.details.due}`}</td>
         <td><span className="acts">{r.image_path&&<a onClick={()=>openImg(r.image_path)}>📎</a>}<a onClick={()=>printRow(p,r)}>🖨</a>{can('delete')&&<a onClick={()=>del(r)}>✕</a>}</span></td></tr>)}</tbody></table>
@@ -165,7 +174,7 @@ function Reports({p,rows}){
   const label=kind==='month'?s.toLocaleDateString('ar-EG',{month:'long',year:'numeric'}):`من ${dshort(s)} إلى ${dshort(last)}`
   const title=`${p.name} - ${kind==='month'?'تقرير شهري':'تقرير أسبوعي'}`
   const sumRows=[['إجمالي المستلم',income],['إجمالي المصروف',spent],['الرصيد',income-spent],['المستخلصات',ext],
-    ['شراء خامات',sum(['material_in'])],['يوميات العمال',sum(['labor'])],['مصروفات أخرى',sum(['expense'])]]
+    ['شراء خامات',sum(['material_in'])],['يوميات العمال',sum(['labor'])],['مواصلات',sum(['transport'])],['مصروفات أخرى',sum(['expense'])]]
   const excel=()=>{
     const wb=XLSX.utils.book_new()
     const w1=XLSX.utils.aoa_to_sheet([[title],['الفترة',label],[],...sumRows]);w1['!cols']=[{wch:24},{wch:28}]
@@ -187,7 +196,7 @@ function Reports({p,rows}){
     <p className="muted">{label} · {sel.length} سجل · مستلم <b className="pos">{money(income)}</b> · مصروف <b className="neg">{money(spent)}</b> · رصيد <b>{money(income-spent)}</b></p></div>
 }
 
-const CO={name:'كيان',addr:'أبو الغيط',phone:'01142326817'}
+const CO={name:'الكيان للمقاولات',addr:'أبو الغيط',phone:'01142326817'}
 const num=n=>Number(n||0),pc=x=>x.pct===undefined||x.pct===''?100:num(x.pct)
 const lineTot=x=>num(x.qty)*num(x.price)*pc(x)/100,extTotal=it=>(it||[]).reduce((s,x)=>s+lineTot(x),0)
 const EXT_COLS=[['name','البند'],['unit','الوحدة'],['qty','الكمية','n'],['price','السعر','n'],['pct','% (100)','n']]
@@ -213,20 +222,21 @@ function printDoc({title,meta=[],party,head,rows,totals=[],words:w,img}){
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>
   @page{size:A4;margin:12mm}body{font-family:Cairo,Tahoma,sans-serif;color:#222;font-size:12px;margin:0}
   .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #999;padding-bottom:8px}
-  h1{margin:0;font-size:34px;color:#d9531e}.co p{margin:2px 0}.party{width:270px}.party div{display:flex;margin-bottom:2px}
+  h1{margin:0;font-size:34px;color:#d9531e}.logo{height:92px;display:block;border-radius:8px;margin-bottom:4px}.co p{margin:2px 0}.party{width:270px}.party div{display:flex;margin-bottom:2px}
   .party b{background:#f28c28;color:#fff;padding:2px 8px;width:120px;font-weight:400}.party span{padding:2px 8px;font-weight:700}
   .band{display:flex;margin:14px 0;background:#2f80d9;color:#fff}.band h2{margin:0;padding:14px 24px;font-size:24px;width:30%}
   .m{flex:1;display:flex}.m div{flex:1;text-align:center;padding:8px 4px;border-right:1px solid #fff6}.m small{display:block;opacity:.85}
   table{width:100%;border-collapse:collapse;margin-top:8px}th{border-bottom:2px solid #888;padding:8px 6px;text-align:right}
   td{padding:7px 6px;border-bottom:1px solid #ddd}.tot{width:300px;margin-top:12px}.tot div{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding:6px 4px}
   .tot div:last-child{font-weight:700;background:#eaf2fc}.w{margin-top:14px;font-weight:600}.f{margin-top:22px;color:#888;font-size:10px;border-top:1px solid #ccc;padding-top:4px}</style></head><body>
-  <div class="top"><div class="co"><h1>${esc(CO.name)}</h1><p>${esc(CO.addr)}</p><p>ت: ${esc(CO.phone)}</p></div>
+  <div class="top"><div class="co"><img class="logo" src="${location.origin}/logo.jpg" alt="${esc(CO.name)}"><p>${esc(CO.addr)}</p><p>ت: ${esc(CO.phone)}</p></div>
   ${party?`<div class="party">${party.map(([k,v])=>`<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('')}</div>`:''}</div>
   <div class="band"><h2>${esc(title)}</h2><div class="m">${m.map(([k,v])=>`<div><small>${esc(k)}</small>${esc(v)}</div>`).join('')}</div></div>
   <table><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>
   <div class="tot">${totals.map(([k,v])=>`<div><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('')}</div>
   ${w?`<div class="w">${esc(w)}</div>`:''}${img?`<img src="${img}" style="max-width:100%;max-height:430px;margin-top:16px;border:1px solid #ccc">`:''}<div class="f">${esc(CO.name)} · ${esc(CO.phone)}</div></body></html>`)
-  win.document.close();win.focus();setTimeout(()=>win.print(),img?1800:700)}
+  win.document.close();win.focus()
+  const imgs=[...win.document.images];Promise.all(imgs.map(i=>i.complete?1:new Promise(r=>{i.onload=i.onerror=r}))).then(()=>setTimeout(()=>win.print(),400))}
 
 const printExtract=(p,r,img)=>{const d=r.details||{},it=d.items||[],t=extTotal(it),net=t-num(d.prev)
   printDoc({title:`مستخلص رقم ${d.num}`,meta:[['الحالة',d.status],['التاريخ',dshort(new Date(d.date||r.created_at))]],
@@ -273,7 +283,7 @@ const printRow=async(p,r)=>{let img;if(r.image_path){const {data}=await supabase
     totals:mo?[]:[['المبلغ',money(r.amount)]],words:mo?null:toWords(r.amount),img})}
 
 const CATS=[['income','المقبوضات',['income']],['extract','المستخلصات',['extract']],['cheque','الشيكات',['cheque_in','cheque_out']],
-  ['material','الخامات',['material_in','material_out']],['labor','يوميات العمال',['labor']],['expense','المصروفات',['expense']]]
+  ['material','الخامات',['material_in','material_out']],['labor','يوميات العمال',['labor']],['expense','المصروفات',['expense']],['transport','المواصلات',['transport']]]
 function Summary({p,rows,go}){
   const sum=t=>rows.filter(r=>t.includes(r.type)).reduce((s,r)=>s+num(r.amount),0)
   const income=sum(['income']),spent=sum(SPENT)
@@ -294,4 +304,122 @@ function Summary({p,rows,go}){
           <span>{r.type==='material_out'?'—':money(r.amount)} <a onClick={e=>{e.stopPropagation();printRow(p,r)}}>🖨</a></span></div>)}
         {!rs.length&&<small className="muted">لا يوجد</small>}
         {rs.length>0&&<a onClick={()=>go(k,null)}>عرض الكل ({rs.length}) ←</a>}</div>})}</div></>
+}
+
+function Companies({can,open}){
+  const [list,setList]=useState([]),[f,setF]=useState(null),[orph,setO]=useState(0)
+  const load=useCallback(async()=>{const {data}=await supabase.from('companies').select('*, projects(count)').order('name');setList(data||[])
+    const {count}=await supabase.from('projects').select('id',{count:'exact',head:true}).is('company_id',null);setO(count||0)},[])
+  useEffect(()=>{load()},[load])
+  const save=async e=>{e.preventDefault();const {error}=await supabase.from('companies').insert(f);if(error)alert(error.message);else{setF(null);load()}}
+  return <>
+    <div className="bar"><h2>الشركات</h2>{can('create_project')&&<button className="gold" onClick={()=>setF({name:'',phone:'',address:'',note:''})}>+ إضافة شركة</button>}</div>
+    {f&&<form className="card grid" onSubmit={save}>
+      <input placeholder="اسم الشركة" value={f.name} onChange={e=>setF({...f,name:e.target.value})} required/>
+      <input placeholder="التليفون" value={f.phone} onChange={e=>setF({...f,phone:e.target.value})}/>
+      <input placeholder="العنوان" value={f.address} onChange={e=>setF({...f,address:e.target.value})}/>
+      <button className="gold">حفظ</button><button type="button" className="ghost" onClick={()=>setF(null)}>إلغاء</button></form>}
+    <div className="cards">{list.map(c=><div key={c.id} className="card hover" onClick={()=>open(c.id)}>
+      <h3>{c.name}</h3><p className="muted">{c.phone||'—'} · {c.address||'—'}</p><p className="gold-t">{c.projects?.[0]?.count||0} مشروع</p></div>)}
+      {orph>0&&<div className="card hover" onClick={()=>open('none')}><h3>مشاريع بدون شركة</h3><p className="gold-t">{orph} مشروع</p></div>}
+      {!list.length&&!orph&&<p className="muted">لا توجد شركات بعد</p>}</div></>
+}
+
+function Company({id,can,admin,back,open}){
+  const [c,setC]=useState(null),[tab,setTab]=useState('projects'),[projs,setProjs]=useState([])
+  useEffect(()=>{if(id!=='none')supabase.from('companies').select('*').eq('id',id).single().then(({data})=>setC(data))
+    let q=supabase.from('projects').select('id,name');q=id==='none'?q.is('company_id',null):q.eq('company_id',id);q.then(({data})=>setProjs(data||[]))},[id,tab])
+  return <><a onClick={back} className="muted">→ الشركات</a><h2>{c?.name||'مشاريع بدون شركة'}</h2><p className="muted">{c?.phone} {c?.address}</p>
+    {id!=='none'&&<div className="tabs">{[['projects','المشاريع'],['stmt','كشف الحساب'],['bills','فواتير المشتريات']].map(([k,v])=><button key={k} className={tab===k?'on':''} onClick={()=>setTab(k)}>{v}</button>)}</div>}
+    {tab==='projects'&&<Projects can={can} open={open} cid={id}/>}
+    {tab==='stmt'&&c&&<Statement c={c}/>}
+    {tab==='bills'&&c&&<Files cat="bill" companyId={id} projects={projs} c={c} can={can} admin={admin}/>}</>
+}
+
+function Statement({c}){
+  const [rows,setRows]=useState([])
+  useEffect(()=>{(async()=>{const {data:ps}=await supabase.from('projects').select('id,name').eq('company_id',c.id);if(!ps?.length)return setRows([])
+    const {data}=await supabase.from('entries').select('*').in('project_id',ps.map(x=>x.id)).in('type',['extract','income','cheque_in']).order('created_at')
+    const nm=Object.fromEntries(ps.map(x=>[x.id,x.name]));setRows((data||[]).map(r=>({...r,pname:nm[r.project_id]})))})()},[c.id])
+  let bal=0
+  const L=rows.map(r=>{const debit=r.type==='extract'?num(r.amount):0,credit=debit?0:num(r.amount);bal+=debit-credit
+    return {...r,debit,credit,bal,kind:r.type==='extract'?'مستخلص':r.type==='income'?'استلام نقدي':'استلام شيك'}})
+  const sum=f=>L.filter(f).reduce((s,r)=>s+num(r.amount),0)
+  const ext=sum(r=>r.type==='extract'),cash=sum(r=>r.type==='income'),chq=sum(r=>r.type==='cheque_in'),rest=ext-cash-chq
+  const tot=[['إجمالي المستخلصات',money(ext)],['مستلم نقدي',money(cash)],['مستلم شيكات',money(chq)],['إجمالي المستلم',money(cash+chq)],['المتبقي على الشركة',money(rest)]]
+  const print=()=>printDoc({title:'كشف حساب',meta:[['الحركات',L.length]],party:[['الشركة',c.name],['التليفون',c.phone||'—'],['العنوان',c.address||'—']],
+    head:['م','التاريخ','المشروع','البيان','النوع','مدين','دائن','الرصيد'],
+    rows:L.map((r,i)=>[i+1,dshort(new Date(r.created_at)),r.pname,r.title,r.kind,r.debit?money(r.debit):'',r.credit?money(r.credit):'',money(r.bal)]),totals:tot,words:rest>0?toWords(rest):null})
+  return <>
+    <div className="bar"><span className="muted">المستخلصات = مدين · النقدي والشيكات المستلمة = دائن</span><button className="gold" onClick={print}>🖨 طباعة كشف الحساب</button></div>
+    <div className="stats"><Stat l="إجمالي المستخلصات" v={money(ext)}/><Stat l="مستلم نقدي" v={money(cash)} c="pos"/><Stat l="مستلم شيكات" v={money(chq)} c="pos"/><Stat l="المتبقي" v={money(rest)} c={rest>0?'neg':'pos'}/></div>
+    <div className="card table"><table><thead><tr><th>التاريخ</th><th>المشروع</th><th>البيان</th><th>النوع</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr></thead>
+      <tbody>{L.map(r=><tr key={r.id}><td data-label="التاريخ">{when(r.created_at)}</td><td data-label="المشروع">{r.pname}</td><td data-label="البيان">{r.title}</td><td data-label="النوع"><span className={'tag '+r.type}>{r.kind}</span></td>
+        <td data-label="مدين">{r.debit?money(r.debit):'—'}</td><td data-label="دائن">{r.credit?money(r.credit):'—'}</td><td data-label="الرصيد">{money(r.bal)}</td></tr>)}</tbody></table>
+      {!L.length&&<p className="muted pad">لا توجد حركات</p>}</div></>
+}
+
+function Files({cat,projectId,companyId,projects,p,c,can,admin}){
+  const [rows,setRows]=useState([]),[f,setF]=useState(null)
+  const load=useCallback(async()=>{let q=supabase.from('files').select('*, project:projects(name)').eq('category',cat).order('created_at',{ascending:false})
+    q=projectId?q.eq('project_id',projectId):q.eq('company_id',companyId);const {data}=await q;setRows(data||[])},[cat,projectId,companyId])
+  useEffect(()=>{load()},[load])
+  const total=rows.reduce((s,r)=>s+num(r.amount),0)
+  const save=async e=>{e.preventDefault();if(!f.file)return alert('اختر ملف')
+    const path=`files/${crypto.randomUUID()}.${f.file.name.split('.').pop()}`
+    const u=await supabase.storage.from('attachments').upload(path,f.file);if(u.error)return alert(u.error.message)
+    const {error}=await supabase.from('files').insert({category:cat,project_id:projectId||f.project||null,company_id:companyId||p?.company_id||null,title:f.title,
+      amount:f.amount===''?null:num(f.amount),doc_date:f.date,file_path:path,file_name:f.file.name});if(error)alert(error.message);else{setF(null);load()}}
+  const del=async r=>{if(confirm('حذف الملف؟')){await supabase.storage.from('attachments').remove([r.file_path]);await supabase.from('files').delete().eq('id',r.id);load()}}
+  const print=()=>printDoc({title:'كشف مشتريات',meta:[['عدد الفواتير',rows.length]],party:c?[['الشركة',c.name],['التليفون',c.phone||'—']]:[['المشروع',p.name],['العميل',p.client||'—']],
+    head:['م','التاريخ','البيان','المشروع','المبلغ'],rows:[...rows].reverse().map((r,i)=>[i+1,r.doc_date,r.title,r.project?.name||'—',r.amount!=null?money(r.amount):'—']),
+    totals:[['إجمالي المشتريات',money(total)]],words:total?toWords(total):null})
+  const bill=cat==='bill'
+  return <>
+    <div className="bar"><h3>{bill?'فواتير المشتريات':'المستخلصات الخارجية'} <small className="muted">(ملفات للقراءة فقط)</small></h3><div className="acts">
+      {bill&&<button className="ghost brd" onClick={print}>🖨 كشف المشتريات</button>}
+      {can('add')&&<button className="gold" onClick={()=>setF({title:'',amount:'',date:ymd(new Date()),project:''})}>+ رفع ملف</button>}</div></div>
+    {f&&<form className="card grid" onSubmit={save}>
+      <input placeholder={bill?'البيان / رقم الفاتورة':'رقم أو بيان المستخلص'} value={f.title} onChange={e=>setF({...f,title:e.target.value})} required/>
+      <input type="date" value={f.date} onChange={e=>setF({...f,date:e.target.value})}/>
+      <input type="number" step="any" placeholder="المبلغ (اختياري)" value={f.amount} onChange={e=>setF({...f,amount:e.target.value})}/>
+      {projects&&<select value={f.project} onChange={e=>setF({...f,project:e.target.value})}><option value="">بدون مشروع</option>{projects.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>}
+      <input type="file" accept="image/*,application/pdf" onChange={e=>setF({...f,file:e.target.files[0]})} required/>
+      <button className="gold">رفع</button><button type="button" className="ghost" onClick={()=>setF(null)}>إلغاء</button></form>}
+    <div className="card table"><table><thead><tr><th>التاريخ</th><th>البيان</th><th>المشروع</th><th>المبلغ</th><th>الملف</th><th/></tr></thead>
+      <tbody>{rows.map(r=><tr key={r.id}><td data-label="التاريخ">{r.doc_date}</td><td data-label="البيان">{r.title}</td><td data-label="المشروع">{r.project?.name||'—'}</td>
+        <td data-label="المبلغ">{r.amount!=null?money(r.amount):'—'}</td><td data-label="الملف"><a onClick={()=>openImg(r.file_path)}>📎 فتح</a></td>
+        <td>{admin&&<a onClick={()=>del(r)}>✕</a>}</td></tr>)}</tbody></table>
+      {!rows.length&&<p className="muted pad">لا توجد ملفات</p>}{total>0&&<p className="pad">الإجمالي: <b className="gold-t">{money(total)}</b></p>}</div></>
+}
+
+function ExtractsPanel({p,rows}){
+  const ex=rows.filter(r=>r.type==='extract').sort((a,b)=>new Date(a.created_at)-new Date(b.created_at))
+  if(!ex.length)return null
+  const prev=r=>num(r.details?.prev),tv=ex.reduce((s,r)=>s+num(r.amount),0),tp=ex.reduce((s,r)=>s+prev(r),0)
+  const print=()=>printDoc({title:'ملخص المستخلصات',meta:[['عدد المستخلصات',ex.length]],party:[['المشروع',p.name],['العميل',p.client||'—'],['نوعية العمل',p.work_type||'—']],
+    head:['م','رقم المستخلص','التاريخ','الحالة','القيمة','دفعات سابقة','الصافي'],
+    rows:ex.map((r,i)=>[i+1,r.details?.num,dshort(new Date(r.details?.date||r.created_at)),r.details?.status||'',money(r.amount),money(prev(r)),money(num(r.amount)-prev(r))]),
+    totals:[['إجمالي المستخلصات',money(tv)],['دفعات سابقة',money(tp)],['الصافي',money(tv-tp)]],words:toWords(tv-tp)})
+  return <div className="card"><div className="line"><h4>ملخص المستخلصات ({ex.length})</h4><button className="gold" onClick={print}>🖨 طباعة ملخص كل المستخلصات</button></div>
+    {ex.map(r=><div key={r.id} className="sitem" style={{cursor:'default'}}><span>مستخلص رقم {r.details?.num}<small className="muted">{r.details?.status} · {when(r.created_at)}</small></span>
+      <span>{money(r.amount)} <a onClick={()=>printRow(p,r)}>⬇ تنزيل</a></span></div>)}</div>
+}
+
+function Requests({admin}){
+  const [list,setList]=useState([])
+  const load=useCallback(async()=>{const {data}=await supabase.from('requests').select('*, projects(name), requester:profiles!requested_by(full_name)').order('created_at',{ascending:false});setList(data||[])},[])
+  useEffect(()=>{load()},[load])
+  const ok=async r=>{const {error}=await supabase.rpc('approve_request',{rid:r.id});if(error)alert(error.message);load()}
+  const no=async r=>{const why=prompt('سبب الرفض (اختياري)');if(why===null)return;const {error}=await supabase.rpc('reject_request',{rid:r.id,why});if(error)alert(error.message);load()}
+  const S={pending:'قيد المراجعة',approved:'تمت الموافقة',rejected:'مرفوض'}
+  return <><h2>{admin?'طلبات الموافقة':'طلباتي'}</h2>
+    {list.map(r=>{const p=r.payload,del=r.kind==='delete_entry';return <div key={r.id} className="card">
+      <div className="line"><b>{r.requester?.full_name||'—'} {del?'يطلب حذف':'يطلب إضافة'} {TYPES[p.type]}: {p.title}</b><span className={'tag '+(r.status==='approved'?'income':r.status==='rejected'?'expense':'extract')}>{S[r.status]}</span></div>
+      <p className="muted">مشروع {r.projects?.name} · {when(r.created_at)}</p>
+      <p>{p.type==='extract'?`مستخلص رقم ${p.details?.num} · ${p.details?.items?.length||0} بند · `:''}{p.qty?`الكمية ${p.qty} ${p.unit||''} · `:''}{p.type!=='material_out'&&<b className="gold-t">{money(p.type==='extract'?extTotal(p.details?.items):p.amount)}</b>} {p.note&&`· ${p.note}`}</p>
+      {p.image_path&&<a onClick={()=>openImg(p.image_path)}>📎 الصورة المرفقة</a>}
+      {r.reason&&<p className="neg">سبب الرفض: {r.reason}</p>}
+      {admin&&r.status==='pending'&&<div className="acts"><button className="gold" onClick={()=>ok(r)}>✓ موافقة</button><button className="ghost brd" onClick={()=>no(r)}>✕ رفض</button></div>}</div>})}
+    {!list.length&&<p className="muted">لا توجد طلبات</p>}</>
 }
