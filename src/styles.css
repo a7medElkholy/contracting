@@ -52,3 +52,4 @@ th,td{padding:12px 16px;border-bottom:1px solid var(--line);text-align:right;whi
 .sitem{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 8px;border-bottom:1px solid var(--line);cursor:pointer;border-radius:8px}.sitem:hover{background:#1a2440}.sitem small{display:block;font-size:11px}.table tr.hl td{background:#2a2410}
 .badge{background:var(--neg);color:#fff;border-radius:10px;padding:0 7px;margin-right:6px;font-size:12px}.tag.transport{background:#4c1d1d;color:var(--neg)}
 .brand{display:flex;align-items:center;gap:10px}.hlogo{height:48px;display:block}.llogo{width:260px;max-width:80%;display:block;margin:0 auto 4px}@media(max-width:700px){.hlogo{height:40px}}
+.bar2{height:6px;background:#222c44;border-radius:4px;margin:10px 0}.bar2 i{display:block;height:100%;background:linear-gradient(90deg,#e6c887,#b8924a);border-radius:4px}
